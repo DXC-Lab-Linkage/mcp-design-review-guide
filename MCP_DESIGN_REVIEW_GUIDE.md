@@ -10,10 +10,10 @@ audience:
   - "MCPクライアント／ホスト開発者"
   - "AIエージェントを業務へ組み込む設計者"
   - "AIコーディングエージェント"
-guide_version: "0.9.0-beta"
+guide_version: "0.9.1-beta"
 status: "public beta"
 spec_version_checked: "2026-07-28"
-last_reviewed: "2026-08-27"
+last_reviewed: "2026-10-02"
 review_due: "MCP仕様の新版公開時、または利用SDKのメジャー更新時"
 label_legend:
   "[MCP Specification]": "MCP仕様で定義されている事項。版は spec_version_checked。"
@@ -600,27 +600,59 @@ Appendix B.4）。削る前後の長さを両方返すと、呼び出し側が�
 
 ## 4.4 構造化エラー [Recommendation]
 
+> 更新（0.9.1-beta）: 独自エラーペイロードをMCPのTool Result全体へ組み込み、標準フィールドと独自フィールドの境界を明確化した。
+> 本ガイドの実装検証（Appendix B）は、この更新より前の 0.9.0-beta で行っている。
+
 `MCP error` のような抽象的なエラーだけを返さない。
+
+以下は、MCPのTool Result全体を示した例である。
 
 ```json
 {
-  "code": "invalid_input",
-  "message": "start_date must be before end_date",
-  "retryable": false,
-  "correctable": true,
-  "suggested_fix": "start_date を end_date より前の日付にして呼び直す",
-  "details": {
-    "field": "start_date"
+  "resultType": "complete",
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"code\": \"invalid_input\", \"message\": \"start_date must be before end_date\", \"retryable\": false, \"correctable\": true, \"suggested_fix\": \"start_date を end_date より前の日付にして呼び直す\", \"details\": {\"field\": \"start_date\"}, \"correlation_id\": \"...\"}"
+    }
+  ],
+  "structuredContent": {
+    "code": "invalid_input",
+    "message": "start_date must be before end_date",
+    "retryable": false,
+    "correctable": true,
+    "suggested_fix": "start_date を end_date より前の日付にして呼び直す",
+    "details": {
+      "field": "start_date"
+    },
+    "correlation_id": "..."
   },
-  "correlation_id": "..."
+  "isError": true
 }
 ```
 
-⚠ **`retryable` / `correctable` / `suggested_fix` はMCP仕様の標準フィールドではない。**
-上記は、Agentによる自己修復と運用診断を両立させるために**本ガイドが推奨する独自のエラー契約の
-例**である。採用する場合は、フィールド名と意味をサーバー／クライアント間の合意事項として
-明文化する（仕様が定めるのはJSON-RPCのエラーコード体系までで、**エラー本文の構造は実装側の
-設計事項**である）。
+⚠ **`retryable` / `correctable` / `suggested_fix` / `correlation_id` はMCP仕様の標準フィールドではない。**
+MCP仕様は、完了したTool Resultの `resultType`、`content`、`structuredContent`、`isError` を定めている。
+上記の `structuredContent` に入れた独自フィールドは、Agentによる自己修復と運用診断を両立させるために
+**本ガイドが推奨する独自のエラー契約の例**である。採用する場合は、フィールド名と意味を
+サーバー／クライアント間の合意事項として明文化する。
+
+⚠ **[MCP Specification]** `structuredContent` を返すツールは、後方互換のため同じJSONをシリアライズした
+TextContentも返すべきとされている（SHOULD）。上の例で `content` にも同じエラーオブジェクトを入れているのはそのためである。
+
+⚠ **[Interoperability]** モデルが自己修復に使えるのは、ホストがモデルへ渡した部分だけである。
+`content` のテキストを人間向けのメッセージだけにすると、`correctable` や `suggested_fix` が
+モデルへ届かないホストがありうる。自己修復の材料は `content` 側にも必ず入れる。
+（[Experiment] Appendix B.6 で自己修復を観測した実装は、このエラーオブジェクトを `content` の
+テキストとして返し、`structuredContent` は使っていなかった。）
+
+⚠ **[MCP Specification]** ツールが `outputSchema` を宣言している場合、サーバーはそのスキーマに適合する
+structured resultを返さなければならない（MUST）。仕様にエラー時の例外は書かれていないため、
+正常時の形だけを宣言したスキーマに対して、エラー時の `structuredContent` へエラーオブジェクトを
+入れると適合しない。次のどちらかにする。
+
+- エラー時は `structuredContent` を省き、エラーオブジェクトを `content` のテキストとしてだけ返す
+- `outputSchema` に正常時とエラー時の両方の形を含める（`oneOf` など）
 
 ### `retryable` だけでは足りない
 
@@ -829,7 +861,7 @@ expected_duration:
 ⚠ **テールは「1回の処理が遅い」ではなく「再試行」で作られることが多い。**
 契約に書く所要時間は、**単発と再試行込みを分けて**書く。片方だけ書くと、クライアント側の
 タイムアウト設定が必ず外れる。再試行を持つツールでは、上限は「再試行を含めた最悪値」で考える
-（[Experiment] 単発と再試行込みで一桁近い差が出た観測は Appendix B.7）。
+（[Experiment] 単発と再試行込みで5倍前後の差が出た観測は Appendix B.7）。
 
 ⚠ **[Interoperability] クライアント側の既定タイムアウトは短いことがある。**
 ツール実行に1分程度の既定を持つHostが存在する。既定のままでは**正常だが遅い処理が失敗として
@@ -1502,11 +1534,15 @@ MCPを成功させる中心は、プロトコル接続そのものではない�
 
 | 項目 | 観測値 |
 |---|---|
-| 単発の所要時間（n=6） | 11.7〜19.5秒 |
-| 上流が処理を実行せず再試行した呼び出し | **80秒** |
+| 順次実行・再試行なし（n=6） | 11.7〜19.5秒（中央値15.1秒） |
+| 並行実行2本のうち、再試行なしの1本 | 17.5秒 |
+| 並行実行2本のうち、上流が処理を実行せず再試行した1本 | **80.0秒** |
+
+並行2本の壁時計時間は80.0秒で、2本の合計（97.5秒）より短く、並行に動作していた。
+再試行なしの呼び出しは並行時でも17.5秒で、順次実行の範囲から大きく外れていない。
 
 **テールは「1回の処理が遅い」ではなく「再試行」が作った。** 契約に書く所要時間を
-単発と再試行込みで分けるべき根拠がこれである。
+単発（再試行なし）と再試行込みで分けるべき根拠がこれである。
 
 なお、ツール実行のタイムアウト既定値が1分程度のホストが存在するため、この所要時間分布では
 **正常だが遅い処理が失敗として観測される。** 導入手順に設定変更を含める必要がある。
@@ -1602,4 +1638,5 @@ MCPを成功させる中心は、プロトコル接続そのものではない�
 
 | 版 | 日付 | 内容 |
 |---|---|---|
-| 0.9.0-beta | 2026-08-27 | 初回公開（public beta）。MCP仕様・本ガイドの推奨・相互運用性・セキュリティ・実装検証をラベルで区別し、実測値と検証条件を Appendix B へ集約した。**beta の理由**: 実装検証が読み取り専用MCP 1件に限られ、状態変更を伴うMCP・クライアント／ホスト実装・多数ツール・複数利用者・Enterpriseテレメトリは未検証（Appendix B.1）。この範囲が埋まった時点で 1.0.0 とする |
+| 0.9.1-beta | 2026-10-02 | §4.4の構造化エラー例をMCPのTool Result全体へ修正し、標準フィールドと本ガイド独自のエラー契約を区別した。MCP仕様 2026-07-28 の Tools 節と照合し、`content` へのシリアライズ（SHOULD）、`outputSchema` 宣言時の適合（MUST）、ホストがモデルへ渡す範囲の注意を追加した。Appendix B.7 のレイテンシ表記を生ログと再照合し、順次実行6件と並行実行2件を分離した（§7.3 の「一桁近い差」を「5倍前後の差」へ訂正）。ガイド名を「設計・実装レビューガイド」へ変更。**§4.4 の変更は実装検証を経ていない**（実装検証は 0.9.0-beta で実施） |
+| 0.9.0-beta | 2026-08-27 | 初回公開（public beta）。実装レビューの検証に使った版。MCP仕様・本ガイドの推奨・相互運用性・セキュリティ・実装検証をラベルで区別し、実測値と検証条件を Appendix B へ集約した。**beta の理由**: 実装検証が読み取り専用MCP 1件に限られ、状態変更を伴うMCP・クライアント／ホスト実装・多数ツール・複数利用者・Enterpriseテレメトリは未検証（Appendix B.1）。この範囲が埋まった時点で 1.0.0 とする |
